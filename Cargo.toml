@@ -1,5 +1,5 @@
 [package]
-name = "test_gif"
+name = "gif_clock"
 version = "0.1.0"
 edition = "2021"
 authors = [ "Michał Perzak <michal.perzak@displate.com>" ]
