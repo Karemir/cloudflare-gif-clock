@@ -23,6 +23,15 @@ The clock is rendered using a simple 5x7 pixel bitmap font that's scaled up for 
 Deploy this worker to see a continuously updating digital clock that shows the current time. The GIF automatically refreshes to keep the time current. Sample output:
 ![Digital Clock GIF Demo](docs/demo.gif)
 
+### UPDATE
+
+Now it counts down to a place in time. It also has a lato font
+
+Incoming request uri will look like this:
+`/?countdown_to=2025-11-28T17:00:00Z`
+
+![Digital Clock countdown with font GIF Demo](docs/demo-countdown.gif)
+
 ## Instructions
 
 Setup your environment with cloudflare [docs](https://developers.cloudflare.com/workers/languages/rust/). At time of writing, these were the steps to take:
