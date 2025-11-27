@@ -11,30 +11,47 @@ const GRADIENT_LEVELS: u8 = 16;
 const CORNER_RADIUS: u32 = 20;
 const TRANSPARENT_INDEX: u8 = 0;
 const BACKGROUND_INDEX: u8 = 1;
-const TEMPLATE_TIME: &str = "88:88:88";
-
 static FONT_DATA: &[u8] = include_bytes!("fonts/Lato-Regular.ttf");
 static FONT: Lazy<Font> = Lazy::new(|| {
     Font::from_bytes(FONT_DATA, FontSettings::default()).expect("Failed to load font")
 });
 
 // incoming request uri will look like this:
-// /?countdown_to=2025-12-31T23:59:59Z
+// /?countdown_to=2025-11-28T17:00:00Z
 
 #[event(fetch)]
-async fn fetch(_req: HttpRequest, _env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
 
-    // Get current timestamp using JavaScript Date
-    let timestamp = js_sys::Date::now() / 1000.0;
+    let now_secs = (js_sys::Date::now() / 1000.0).floor() as u64;
+    let target_secs = extract_target_timestamp(&req)?.unwrap_or(now_secs + 10 * 3600);
+    let countdown_start = target_secs.saturating_sub(now_secs);
 
-    // Generate the countdown GIF
-    let gif_data = generate_countdown_gif(timestamp as u64);
+    let gif_data = generate_countdown_gif(countdown_start);
     let mut resp = Response::from_bytes(gif_data).unwrap();
     // Set the Content-Type header to image/gif
     resp.headers_mut().set("Content-Type", "image/gif").unwrap();
 
     Ok(resp)
+}
+
+fn extract_target_timestamp(req: &Request) -> Result<Option<u64>> {
+    let url = req.url()?;
+    let param = url
+        .query_pairs()
+        .find(|(key, _)| key == "countdown_to")
+        .map(|(_, value)| value.to_string());
+
+    let parsed = param.and_then(|value| {
+        let millis = js_sys::Date::parse(&value);
+        if millis.is_nan() {
+            None
+        } else {
+            Some((millis / 1000.0).floor() as u64)
+        }
+    });
+
+    Ok(parsed)
 }
 
 fn build_grayscale_palette(levels: u8) -> Vec<u8> {
@@ -95,7 +112,7 @@ fn apply_corner_mask(buffer: &mut [u8], width: u32, height: u32) {
     }
 }
 
-fn generate_countdown_gif(current_timestamp: u64) -> Vec<u8> {
+fn generate_countdown_gif(starting_seconds: u64) -> Vec<u8> {
     // Set up GIF parameters
     let width: u32 = 600;
     let height: u32 = 200;
@@ -109,15 +126,14 @@ fn generate_countdown_gif(current_timestamp: u64) -> Vec<u8> {
     let mut encoder = Encoder::new(&mut cursor, width as u16, height as u16, &color_map).unwrap();
     encoder.set_repeat(Repeat::Infinite).unwrap();
 
-    // Create frames for countdown from 60 to 0
+    // Create frames for countdown from the starting point
     for i in 0..=60 {
         // Create a new frame for this number
         let mut frame_data = vec![0; (width * height) as usize];
 
-        // Calculate time using the provided timestamp
-        let total_seconds = current_timestamp - i;
-        let hours = ((total_seconds / 3600) % 24) as u32;
-        let minutes = ((total_seconds / 60) % 60) as u32;
+        let total_seconds = starting_seconds.saturating_sub(i as u64);
+        let hours = (total_seconds / 3600) as u32;
+        let minutes = ((total_seconds % 3600) / 60) as u32;
         let seconds = (total_seconds % 60) as u32;
 
         // In a real implementation, you would use a proper text rendering library
@@ -142,7 +158,11 @@ fn generate_countdown_gif(current_timestamp: u64) -> Vec<u8> {
 fn draw_number(buffer: &mut [u8], width: u32, height: u32, hours: u32, minutes: u32, seconds: u32) {
     buffer.fill(BACKGROUND_INDEX);
 
-    let time_str = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
+    let time_str = format!("{hours:02}:{minutes:02}:{seconds:02}");
+    let template_str: String = time_str
+        .chars()
+        .map(|ch| if ch == ':' { ':' } else { '8' })
+        .collect();
     let font_size = 120.0;
 
     let glyphs = layout_text(&time_str, font_size);
@@ -150,7 +170,7 @@ fn draw_number(buffer: &mut [u8], width: u32, height: u32, hours: u32, minutes: 
         return;
     }
 
-    let template_glyphs = layout_text(TEMPLATE_TIME, font_size);
+    let template_glyphs = layout_text(&template_str, font_size);
     if template_glyphs.len() != glyphs.len() {
         return;
     }
