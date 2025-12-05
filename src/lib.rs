@@ -16,8 +16,10 @@ static FONT: Lazy<Font> = Lazy::new(|| {
     Font::from_bytes(FONT_DATA, FontSettings::default()).expect("Failed to load font")
 });
 
-// incoming request uri will look like this:
-// /?countdown_to=2025-11-28T17:00:00Z
+// incoming request uri can be either:
+// /2025-12-06T10:00:00Z.gif (filename-based)
+// /?countdown_to=2025-12-06T10:00:00Z (query parameter-based)
+// /any-filename.gif?countdown_to=2025-12-06T10:00:00Z (query parameter takes precedence)
 
 #[event(fetch)]
 async fn fetch(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
@@ -31,25 +33,81 @@ async fn fetch(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
     let mut resp = Response::from_bytes(gif_data).unwrap();
     // Set the Content-Type header to image/gif
     resp.headers_mut().set("Content-Type", "image/gif").unwrap();
+    resp.headers_mut()
+        .set("Cache-Control", "no-cache, no-store, must-revalidate")
+        .unwrap();
 
     Ok(resp)
 }
 
 fn extract_target_timestamp(req: &Request) -> Result<Option<u64>> {
     let url = req.url()?;
-    let param = url
+    
+    // First, try to get the date from query parameter (takes precedence)
+    let date_str = url
         .query_pairs()
         .find(|(key, _)| key == "countdown_to")
         .map(|(_, value)| value.to_string());
-
-    let parsed = param.and_then(|value| {
-        let millis = js_sys::Date::parse(&value);
+    
+    // If query parameter not found, try to extract from filename
+    let date_str = if let Some(date) = date_str {
+        Some(date)
+    } else {
+        let url_str = url.as_str();
+        
+        // Parse the path from the URL string
+        // Find the path component after the domain (everything after the third '/' or after '://domain/')
+        let path = if let Some(scheme_end) = url_str.find("://") {
+            let after_scheme = &url_str[scheme_end + 3..];
+            if let Some(path_start) = after_scheme.find('/') {
+                let path_with_query = &after_scheme[path_start..];
+                // Remove query string if present
+                if let Some(query_start) = path_with_query.find('?') {
+                    &path_with_query[..query_start]
+                } else {
+                    path_with_query
+                }
+            } else {
+                return Ok(None);
+            }
+        } else {
+            // Fallback: treat entire string as path if no scheme found
+            if let Some(query_start) = url_str.find('?') {
+                &url_str[..query_start]
+            } else {
+                url_str
+            }
+        };
+        
+        // Extract filename from path (e.g., "/2025-11-28T17:00:00Z.gif" -> "2025-11-28T17:00:00Z.gif")
+        let filename = path.trim_start_matches('/');
+        
+        // Remove .gif extension if present and extract date
+        if filename.ends_with(".gif") {
+            let date = &filename[..filename.len() - 4];
+            if date.is_empty() {
+                None
+            } else {
+                Some(date.to_string())
+            }
+        } else if filename.is_empty() {
+            None
+        } else {
+            Some(filename.to_string())
+        }
+    };
+    
+    // Parse the date string
+    let parsed = if let Some(date_str) = date_str {
+        let millis = js_sys::Date::parse(&date_str);
         if millis.is_nan() {
             None
         } else {
             Some((millis / 1000.0).floor() as u64)
         }
-    });
+    } else {
+        None
+    };
 
     Ok(parsed)
 }
